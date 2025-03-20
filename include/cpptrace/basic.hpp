@@ -164,25 +164,25 @@ namespace cpptrace {
 
         object_frame get_object_info() const;
 
-        std::string to_string() const;
-        std::string to_string(bool color) const;
-        friend std::ostream& operator<<(std::ostream& stream, const stacktrace_frame& frame);
+        std::string to_string();
+        std::string to_string(bool color);
+        friend std::ostream& operator<<(std::ostream& stream, stacktrace_frame& frame);
     };
 
     struct CPPTRACE_EXPORT stacktrace {
         std::vector<stacktrace_frame> frames;
         static stacktrace current(std::size_t skip = 0);
         static stacktrace current(std::size_t skip, std::size_t max_depth);
-        void print() const;
-        void print(std::ostream& stream) const;
-        void print(std::ostream& stream, bool color) const;
-        void print_with_snippets() const;
-        void print_with_snippets(std::ostream& stream) const;
-        void print_with_snippets(std::ostream& stream, bool color) const;
+        void print();
+        void print(std::ostream& stream);
+        void print(std::ostream& stream, bool color);
+        void print_with_snippets();
+        void print_with_snippets(std::ostream& stream);
+        void print_with_snippets(std::ostream& stream, bool color);
         void clear();
         bool empty() const noexcept;
-        std::string to_string(bool color = false) const;
-        friend std::ostream& operator<<(std::ostream& stream, const stacktrace& trace);
+        std::string to_string(bool color = false);
+        friend std::ostream& operator<<(std::ostream& stream, stacktrace& trace);
 
         using iterator = std::vector<stacktrace_frame>::iterator;
         using const_iterator = std::vector<stacktrace_frame>::const_iterator;

@@ -132,15 +132,15 @@ namespace cpptrace {
         return detail::get_frame_object_info(raw_address);
     }
 
-    std::string stacktrace_frame::to_string() const {
+    std::string stacktrace_frame::to_string() {
         return to_string(false);
     }
 
-    std::string stacktrace_frame::to_string(bool color) const {
+    std::string stacktrace_frame::to_string(bool color) {
         return get_default_formatter().format(*this, color);
     }
 
-    std::ostream& operator<<(std::ostream& stream, const stacktrace_frame& frame) {
+    std::ostream& operator<<(std::ostream& stream, stacktrace_frame& frame) {
         return stream << frame.to_string();
     }
 
@@ -168,15 +168,15 @@ namespace cpptrace {
         }
     }
 
-    void stacktrace::print() const {
+    void stacktrace::print() {
         get_default_formatter().print(*this);
     }
 
-    void stacktrace::print(std::ostream& stream) const {
+    void stacktrace::print(std::ostream& stream) {
         get_default_formatter().print(stream, *this);
     }
 
-    void stacktrace::print(std::ostream& stream, bool color) const {
+    void stacktrace::print(std::ostream& stream, bool color) {
         get_default_formatter().print(stream, *this, color);
     }
 
@@ -187,15 +187,15 @@ namespace cpptrace {
         }
     }
 
-    void stacktrace::print_with_snippets() const {
+    void stacktrace::print_with_snippets() {
         detail::get_default_snippet_formatter().print(*this);
     }
 
-    void stacktrace::print_with_snippets(std::ostream& stream) const {
+    void stacktrace::print_with_snippets(std::ostream& stream) {
         detail::get_default_snippet_formatter().print(stream, *this);
     }
 
-    void stacktrace::print_with_snippets(std::ostream& stream, bool color) const {
+    void stacktrace::print_with_snippets(std::ostream& stream, bool color) {
         detail::get_default_snippet_formatter().print(stream, *this, color);
     }
 
@@ -207,11 +207,11 @@ namespace cpptrace {
         return frames.empty();
     }
 
-    std::string stacktrace::to_string(bool color) const {
+    std::string stacktrace::to_string(bool color) {
         return get_default_formatter().format(*this, color);
     }
 
-    std::ostream& operator<<(std::ostream& stream, const stacktrace& trace) {
+    std::ostream& operator<<(std::ostream& stream, stacktrace& trace) {
         get_default_formatter().print(stream, trace);
         return stream;
     }

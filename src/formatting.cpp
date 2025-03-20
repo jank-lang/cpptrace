@@ -24,6 +24,7 @@ namespace cpptrace {
             bool columns = true;
             bool show_filtered_frames = true;
             std::function<bool(const stacktrace_frame&)> filter;
+            std::function<void(stacktrace_frame&)> transform_frame;
         } options;
 
     public:
@@ -54,51 +55,54 @@ namespace cpptrace {
         void filter(std::function<bool(const stacktrace_frame&)> filter) {
             options.filter = filter;
         }
+        void transform_frame(std::function<void(stacktrace_frame&)> &&transform) {
+            options.transform_frame = std::move(transform);
+        }
 
-        std::string format(const stacktrace_frame& frame, detail::optional<bool> color_override = detail::nullopt) const {
+        std::string format(stacktrace_frame& frame, detail::optional<bool> color_override = detail::nullopt) const {
             std::ostringstream oss;
             print_frame_inner(oss, frame, color_override.value_or(options.color == color_mode::always));
             return std::move(oss).str();
         }
 
-        std::string format(const stacktrace& trace, detail::optional<bool> color_override = detail::nullopt) const {
+        std::string format(stacktrace& trace, detail::optional<bool> color_override = detail::nullopt) const {
             std::ostringstream oss;
             print_internal(oss, trace, false, color_override);
             return std::move(oss).str();
         }
 
-        void print(const stacktrace_frame& frame, detail::optional<bool> color_override = detail::nullopt) const {
+        void print(stacktrace_frame& frame, detail::optional<bool> color_override = detail::nullopt) const {
             print(std::cout, frame, color_override);
         }
         void print(
             std::ostream& stream,
-            const stacktrace_frame& frame,
+            stacktrace_frame& frame,
             detail::optional<bool> color_override = detail::nullopt
         ) const {
             print_frame_internal(stream, frame, color_override);
         }
         void print(
             std::FILE* file,
-            const stacktrace_frame& frame,
+            stacktrace_frame& frame,
             detail::optional<bool> color_override = detail::nullopt
         ) const {
             auto str = format(frame, color_override);
             std::fwrite(str.data(), 1, str.size(), file);
         }
 
-        void print(const stacktrace& trace, detail::optional<bool> color_override = detail::nullopt) const {
+        void print(stacktrace& trace, detail::optional<bool> color_override = detail::nullopt) const {
             print(std::cout, trace, color_override);
         }
         void print(
             std::ostream& stream,
-            const stacktrace& trace,
+            stacktrace& trace,
             detail::optional<bool> color_override = detail::nullopt
         ) const {
             print_internal(stream, trace, true, color_override);
         }
         void print(
             std::FILE* file,
-            const stacktrace& trace,
+            stacktrace& trace,
             detail::optional<bool> color_override = detail::nullopt
         ) const {
             auto str = format(trace, color_override);
@@ -131,24 +135,24 @@ namespace cpptrace {
             return do_color;
         }
 
-        void print_internal(std::ostream& stream, const stacktrace& trace, bool newline_at_end, detail::optional<bool> color_override) const {
+        void print_internal(std::ostream& stream, stacktrace& trace, bool newline_at_end, detail::optional<bool> color_override) const {
             bool do_color = should_do_color(stream, color_override);
             maybe_ensure_virtual_terminal_processing(stream, do_color);
             print_internal(stream, trace, newline_at_end, do_color);
         }
 
-        void print_internal(std::ostream& stream, const stacktrace& trace, bool newline_at_end, bool color) const {
+        void print_internal(std::ostream& stream, stacktrace& trace, bool newline_at_end, bool color) const {
             if(!options.header.empty()) {
                 stream << options.header << '\n';
             }
             std::size_t counter = 0;
-            const auto& frames = trace.frames;
+            auto& frames = trace.frames;
             if(frames.empty()) {
                 stream << "<empty trace>\n";
                 return;
             }
             const auto frame_number_width = detail::n_digits(static_cast<int>(frames.size()) - 1);
-            for(const auto& frame : frames) {
+            for(auto& frame : frames) {
                 if(options.filter && !options.filter(frame)) {
                     if(!options.show_filtered_frames) {
                         counter++;
@@ -179,7 +183,7 @@ namespace cpptrace {
 
         void print_frame_internal(
             std::ostream& stream,
-            const stacktrace_frame& frame,
+            stacktrace_frame& frame,
             bool color,
             unsigned frame_number_width,
             std::size_t counter
@@ -194,7 +198,7 @@ namespace cpptrace {
 
         void print_frame_internal(
             std::ostream& stream,
-            const stacktrace_frame& frame,
+            stacktrace_frame& frame,
             detail::optional<bool> color_override
         ) const {
             bool do_color = should_do_color(stream, color_override);
@@ -202,7 +206,11 @@ namespace cpptrace {
             print_frame_inner(stream, frame, do_color);
         }
 
-        void print_frame_inner(std::ostream& stream, const stacktrace_frame& frame, bool color) const {
+        void print_frame_inner(std::ostream& stream, stacktrace_frame& frame, bool color) const {
+            if(options.transform_frame) {
+              options.transform_frame(frame);
+            }
+
             const auto reset  = color ? RESET : "";
             const auto green  = color ? GREEN : "";
             const auto yellow = color ? YELLOW : "";
@@ -293,56 +301,60 @@ namespace cpptrace {
         pimpl->filter(std::move(filter));
         return *this;
     }
+    formatter& formatter::transform_frame(std::function<void(stacktrace_frame&)> transform) {
+        pimpl->transform_frame(std::move(transform));
+        return *this;
+    }
 
-    std::string formatter::format(const stacktrace_frame& frame) const {
+    std::string formatter::format(stacktrace_frame& frame) const {
         return pimpl->format(frame);
     }
-    std::string formatter::format(const stacktrace_frame& frame, bool color) const {
+    std::string formatter::format(stacktrace_frame& frame, bool color) const {
         return pimpl->format(frame, color);
     }
 
-    std::string formatter::format(const stacktrace& trace) const {
+    std::string formatter::format(stacktrace& trace) const {
         return pimpl->format(trace);
     }
-    std::string formatter::format(const stacktrace& trace, bool color) const {
+    std::string formatter::format(stacktrace& trace, bool color) const {
         return pimpl->format(trace, color);
     }
 
-    void formatter::print(const stacktrace& trace) const {
+    void formatter::print(stacktrace& trace) const {
         pimpl->print(trace);
     }
-    void formatter::print(const stacktrace& trace, bool color) const {
+    void formatter::print(stacktrace& trace, bool color) const {
         pimpl->print(trace, color);
     }
-    void formatter::print(std::ostream& stream, const stacktrace& trace) const {
+    void formatter::print(std::ostream& stream, stacktrace& trace) const {
         pimpl->print(stream, trace);
     }
-    void formatter::print(std::ostream& stream, const stacktrace& trace, bool color) const {
+    void formatter::print(std::ostream& stream, stacktrace& trace, bool color) const {
         pimpl->print(stream, trace, color);
     }
-    void formatter::print(std::FILE* file, const stacktrace& trace) const {
+    void formatter::print(std::FILE* file, stacktrace& trace) const {
         pimpl->print(file, trace);
     }
-    void formatter::print(std::FILE* file, const stacktrace& trace, bool color) const {
+    void formatter::print(std::FILE* file, stacktrace& trace, bool color) const {
         pimpl->print(file, trace, color);
     }
 
-    void formatter::print(const stacktrace_frame& frame) const {
+    void formatter::print(stacktrace_frame& frame) const {
         pimpl->print(frame);
     }
-    void formatter::print(const stacktrace_frame& frame, bool color) const {
+    void formatter::print(stacktrace_frame& frame, bool color) const {
         pimpl->print(frame, color);
     }
-    void formatter::print(std::ostream& stream, const stacktrace_frame& frame) const {
+    void formatter::print(std::ostream& stream, stacktrace_frame& frame) const {
         pimpl->print(stream, frame);
     }
-    void formatter::print(std::ostream& stream, const stacktrace_frame& frame, bool color) const {
+    void formatter::print(std::ostream& stream, stacktrace_frame& frame, bool color) const {
         pimpl->print(stream, frame, color);
     }
-    void formatter::print(std::FILE* file, const stacktrace_frame& frame) const {
+    void formatter::print(std::FILE* file, stacktrace_frame& frame) const {
         pimpl->print(file, frame);
     }
-    void formatter::print(std::FILE* file, const stacktrace_frame& frame, bool color) const {
+    void formatter::print(std::FILE* file, stacktrace_frame& frame, bool color) const {
         pimpl->print(file, frame, color);
     }
 

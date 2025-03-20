@@ -46,26 +46,27 @@ namespace cpptrace {
         formatter& columns(bool);
         formatter& filtered_frame_placeholders(bool);
         formatter& filter(std::function<bool(const stacktrace_frame&)>);
+        formatter& transform_frame(std::function<void(stacktrace_frame&)>);
 
-        std::string format(const stacktrace_frame&) const;
-        std::string format(const stacktrace_frame&, bool color) const;
+        std::string format(stacktrace_frame&) const;
+        std::string format(stacktrace_frame&, bool color) const;
 
-        std::string format(const stacktrace&) const;
-        std::string format(const stacktrace&, bool color) const;
+        std::string format(stacktrace&) const;
+        std::string format(stacktrace&, bool color) const;
 
-        void print(const stacktrace_frame&) const;
-        void print(const stacktrace_frame&, bool color) const;
-        void print(std::ostream&, const stacktrace_frame&) const;
-        void print(std::ostream&, const stacktrace_frame&, bool color) const;
-        void print(std::FILE*, const stacktrace_frame&) const;
-        void print(std::FILE*, const stacktrace_frame&, bool color) const;
+        void print(stacktrace_frame&) const;
+        void print(stacktrace_frame&, bool color) const;
+        void print(std::ostream&, stacktrace_frame&) const;
+        void print(std::ostream&, stacktrace_frame&, bool color) const;
+        void print(std::FILE*, stacktrace_frame&) const;
+        void print(std::FILE*, stacktrace_frame&, bool color) const;
 
-        void print(const stacktrace&) const;
-        void print(const stacktrace&, bool color) const;
-        void print(std::ostream&, const stacktrace&) const;
-        void print(std::ostream&, const stacktrace&, bool color) const;
-        void print(std::FILE*, const stacktrace&) const;
-        void print(std::FILE*, const stacktrace&, bool color) const;
+        void print(stacktrace&) const;
+        void print(stacktrace&, bool color) const;
+        void print(std::ostream&, stacktrace&) const;
+        void print(std::ostream&, stacktrace&, bool color) const;
+        void print(std::FILE*, stacktrace&) const;
+        void print(std::FILE*, stacktrace&, bool color) const;
     };
 
     CPPTRACE_EXPORT const formatter& get_default_formatter();
