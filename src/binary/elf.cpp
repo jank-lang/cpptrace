@@ -151,23 +151,17 @@ namespace detail {
 
     Result<std::vector<elf::pc_range>, internal_error> elf::get_pc_ranges() {
         std::vector<pc_range> vec;
-        auto header_info_ = get_header_info();
-        if(header_info_.is_error()) {
-            return header_info_.unwrap_error();
-        }
-        auto& header_info = header_info_.unwrap_value();
-        auto strtab_ = get_strtab(header_info.e_shstrndx);
-        if(strtab_.is_error()) {
-            return strtab_.unwrap_error();
-        }
-        auto& strtab = strtab_.unwrap_value();
         auto sections_res = get_sections();
         if(!sections_res) {
             return sections_res.unwrap_error();
         }
         const auto& sections = sections_res.unwrap_value();
         for(const auto& section : sections) {
-            if(string_view(strtab.data() + section.sh_name) == ".text") {
+            if(
+                section.sh_size != 0
+                && section.sh_addr != 0
+                && (section.sh_flags & SHF_EXECINSTR) != 0
+            ) {
                 vec.push_back(
                     pc_range{to<frame_ptr>(section.sh_addr), to<frame_ptr>(section.sh_addr + section.sh_size)}
                 );
@@ -250,6 +244,7 @@ namespace detail {
             return internal_error("ELF file header size mismatch {}", file->path());
         }
         header_info info;
+        info.e_type = byteswap_if_needed(file_header.e_type);
         info.e_phoff = byteswap_if_needed(file_header.e_phoff);
         info.e_phnum = byteswap_if_needed(file_header.e_phnum);
         info.e_phentsize = byteswap_if_needed(file_header.e_phentsize);
@@ -294,6 +289,7 @@ namespace detail {
             section_info info;
             info.sh_name = byteswap_if_needed(section_header.sh_name);
             info.sh_type = byteswap_if_needed(section_header.sh_type);
+            info.sh_flags = byteswap_if_needed(section_header.sh_flags);
             info.sh_addr = byteswap_if_needed(section_header.sh_addr);
             info.sh_offset = byteswap_if_needed(section_header.sh_offset);
             info.sh_size = byteswap_if_needed(section_header.sh_size);
@@ -409,6 +405,11 @@ namespace detail {
         // page 32: symtab spec
         static_assert(Bits == 32 || Bits == 64, "Unexpected Bits argument");
         using SymEntry = typename std::conditional<Bits == 32, Elf32_Sym, Elf64_Sym>::type;
+        auto header_info_ = get_header_info();
+        if(header_info_.is_error()) {
+            return std::move(header_info_).unwrap_error();
+        }
+        const auto& header_info = header_info_.unwrap_value();
         auto sections_ = get_sections();
         if(sections_.is_error()) {
             return std::move(sections_).unwrap_error();
@@ -438,6 +439,13 @@ namespace detail {
                     normalized.st_shndx = byteswap_if_needed(entry.st_shndx);
                     normalized.st_value = byteswap_if_needed(entry.st_value);
                     normalized.st_size = byteswap_if_needed(entry.st_size);
+                    if(
+                        header_info.e_type == ET_REL
+                        && normalized.st_shndx != SHN_UNDEF
+                        && normalized.st_shndx < sections.size()
+                    ) {
+                        normalized.st_value += sections[normalized.st_shndx].sh_addr;
+                    }
                     // on arm I've observed zero-size symbols that overlap with symbols we care about
                     // this interferes with some symbol lookup - that could be fixed by enhancing the logic there but
                     // also it's easy to just exclude zero-size symbols here

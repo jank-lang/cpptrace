@@ -91,8 +91,9 @@ namespace libdwarf {
         auto object_res = lookup_jit_object(dlframe.raw_address);
         // TODO: At some point, dwarf resolution
         if(object_res) {
-            frame.frame.symbol = object_res.unwrap().object
-                .lookup_symbol(dlframe.raw_address - object_res.unwrap().base).value_or("");
+            frame.frame.raw_address = dlframe.raw_address;
+            frame.frame.object_address = dlframe.raw_address - object_res.unwrap().base;
+            frame.frame.symbol = object_res.unwrap().object.lookup_symbol(dlframe.raw_address).value_or("");
         }
     }
     #endif

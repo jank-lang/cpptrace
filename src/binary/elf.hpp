@@ -22,6 +22,7 @@ namespace detail {
         bool is_64;
 
         struct header_info {
+            uint16_t e_type;
             uint64_t e_phoff;
             uint32_t e_phnum;
             uint32_t e_phentsize;
@@ -36,6 +37,7 @@ namespace detail {
         struct section_info {
             uint32_t sh_name;
             uint32_t sh_type;
+            uint64_t sh_flags;
             uint64_t sh_addr;
             uint64_t sh_offset;
             uint64_t sh_size;
