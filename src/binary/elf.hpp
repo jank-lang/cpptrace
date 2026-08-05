@@ -43,6 +43,8 @@ namespace detail {
             uint64_t sh_size;
             uint64_t sh_entsize;
             uint32_t sh_link;
+            uint32_t sh_info;
+            uint64_t sh_addralign;
         };
         bool tried_to_load_sections = false;
         bool did_load_sections = false;
@@ -112,6 +114,28 @@ namespace detail {
         };
         Result<optional<std::vector<symbol_entry>>, internal_error> get_symtab_entries();
         Result<optional<std::vector<symbol_entry>>, internal_error> get_dynamic_symtab_entries();
+        struct object_section {
+            std::string name;
+            uint32_t type;
+            uint64_t flags;
+            uint64_t addr;
+            uint64_t offset;
+            uint64_t size;
+            uint32_t link;
+            uint32_t info;
+            uint64_t addralign;
+            uint64_t entsize;
+            std::vector<char> data;
+        };
+        struct object_data {
+            bool is_little_endian;
+            bool is_64_bit;
+            uint16_t type;
+            uint16_t machine;
+            std::size_t size;
+            std::vector<object_section> sections;
+        };
+        Result<object_data, internal_error> get_object_data();
     private:
         Result<optional<std::vector<symbol_entry>>, internal_error> resolve_symtab_entries(
             const Result<const optional<symtab_info> &, internal_error>&

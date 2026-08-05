@@ -3,6 +3,7 @@
 
 #include <cpptrace/basic.hpp>
 #include "symbols/symbols.hpp"
+#include "binary/elf.hpp"
 #include "platform/platform.hpp"
 #include "utils/string_view.hpp"
 
@@ -47,6 +48,9 @@ namespace libdwarf {
     };
 
     std::unique_ptr<symbol_resolver> make_dwarf_resolver(cstring_view object_path);
+    #if IS_LINUX
+     std::unique_ptr<symbol_resolver> make_dwarf_resolver(elf::object_data object_data);
+    #endif
     #if IS_APPLE
      std::unique_ptr<symbol_resolver> make_debug_map_resolver(const std::string& object_path);
     #endif

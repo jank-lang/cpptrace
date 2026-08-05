@@ -6,6 +6,9 @@
 #include "utils/span.hpp"
 #include "binary/elf.hpp"
 #include "binary/mach-o.hpp"
+#ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
+#include "symbols/dwarf/resolver.hpp"
+#endif
 
 #include <algorithm>
 #include <iostream>
@@ -20,6 +23,9 @@ namespace detail {
         struct object_entry {
             const char* object_start;
             std::unique_ptr<jit_object_type> object;
+            #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
+            std::unique_ptr<libdwarf::symbol_resolver> dwarf_resolver;
+            #endif
         };
         std::vector<object_entry> objects;
 
@@ -28,6 +34,9 @@ namespace detail {
             frame_ptr high; // not inclusive
             const char* object_start;
             jit_object_type* object;
+            #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
+            libdwarf::symbol_resolver* dwarf_resolver;
+            #endif
             bool operator<(const range_entry& other) const {
                 return low < other.low;
             }
@@ -44,7 +53,24 @@ namespace detail {
                 }
                 return;
             }
-            objects.push_back({object.data(), make_unique<jit_object_type>(std::move(object_res).unwrap_value())});
+            object_entry entry{
+                object.data(),
+                make_unique<jit_object_type>(std::move(object_res).unwrap_value())
+                #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
+                , nullptr
+                #endif
+            };
+            #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
+            #if IS_LINUX
+            auto dwarf_object_res = entry.object->get_object_data();
+            if(dwarf_object_res) {
+                entry.dwarf_resolver = libdwarf::make_dwarf_resolver(std::move(dwarf_object_res).unwrap_value());
+            } else if(!should_absorb_trace_exceptions()) {
+                dwarf_object_res.drop_error();
+            }
+            #endif
+            #endif
+            objects.push_back(std::move(entry));
             auto* object_file = objects.back().object.get();
             auto ranges_res = object_file->get_pc_ranges();
             if(ranges_res.is_error()) {
@@ -55,7 +81,15 @@ namespace detail {
             }
             auto& ranges = ranges_res.unwrap_value();
             for(auto range : ranges) {
-                range_entry entry{range.low, range.high, object.data(), object_file};
+                range_entry entry{
+                    range.low,
+                    range.high,
+                    object.data(),
+                    object_file
+                    #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
+                    , objects.back().dwarf_resolver.get()
+                    #endif
+                };
                 // TODO: Perf
                 range_list.insert(std::upper_bound(range_list.begin(), range_list.end(), entry), entry);
             }
@@ -95,7 +129,13 @@ namespace detail {
             }
             ASSERT(pc >= it->low);
             if(pc < it->high) {
-                return jit_object_lookup_result{*it->object, it->low};
+                return jit_object_lookup_result{
+                    *it->object,
+                    it->low
+                    #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
+                    , it->dwarf_resolver
+                    #endif
+                };
             } else {
                 return nullopt;
             }

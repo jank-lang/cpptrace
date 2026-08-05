@@ -9,6 +9,11 @@
 
 CPPTRACE_BEGIN_NAMESPACE
 namespace detail {
+    #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
+    namespace libdwarf {
+        class symbol_resolver;
+    }
+    #endif
     void register_jit_object(const char*, std::size_t);
     void unregister_jit_object(const char*);
     void clear_all_jit_objects();
@@ -22,6 +27,9 @@ namespace detail {
     struct jit_object_lookup_result {
         jit_object_type& object;
         frame_ptr base;
+        #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
+        libdwarf::symbol_resolver* dwarf_resolver;
+        #endif
     };
     optional<jit_object_lookup_result> lookup_jit_object(frame_ptr pc);
     #endif

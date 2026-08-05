@@ -177,6 +177,75 @@ namespace detail {
         return resolve_symtab_entries(get_dynamic_symtab());
     }
 
+    Result<elf::object_data, internal_error> elf::get_object_data() {
+        auto header_info_ = get_header_info();
+        if(header_info_.is_error()) {
+            return std::move(header_info_).unwrap_error();
+        }
+        auto strtab_ = get_strtab(header_info_.unwrap_value().e_shstrndx);
+        if(strtab_.is_error()) {
+            return std::move(strtab_).unwrap_error();
+        }
+        auto sections_ = get_sections();
+        if(sections_.is_error()) {
+            return std::move(sections_).unwrap_error();
+        }
+
+        object_data result{
+            is_little_endian,
+            is_64,
+            header_info_.unwrap_value().e_type,
+            0,
+            0,
+            {}
+        };
+        if(is_64) {
+            auto loaded_header = file->read<Elf64_Ehdr>(0);
+            if(loaded_header.is_error()) {
+                return std::move(loaded_header).unwrap_error();
+            }
+            result.machine = byteswap_if_needed(loaded_header.unwrap_value().e_machine);
+        } else {
+            auto loaded_header = file->read<Elf32_Ehdr>(0);
+            if(loaded_header.is_error()) {
+                return std::move(loaded_header).unwrap_error();
+            }
+            result.machine = byteswap_if_needed(loaded_header.unwrap_value().e_machine);
+        }
+        const auto& sections = sections_.unwrap_value();
+        result.sections.reserve(sections.size());
+        for(const auto& section : sections) {
+            object_section object_section{
+                std::string(strtab_.unwrap_value().data() + section.sh_name),
+                section.sh_type,
+                section.sh_flags,
+                section.sh_addr,
+                section.sh_offset,
+                section.sh_size,
+                section.sh_link,
+                section.sh_info,
+                section.sh_addralign,
+                section.sh_entsize,
+                {}
+            };
+            if(section.sh_size != 0 && section.sh_type != SHT_NOBITS) {
+                object_section.data.resize(section.sh_size);
+                auto read_res = file->read_bytes(
+                    span<char>{object_section.data.data(), to<std::size_t>(section.sh_size)},
+                    section.sh_offset
+                );
+                if(!read_res) {
+                    return read_res.unwrap_error();
+                }
+            }
+            result.sections.push_back(std::move(object_section));
+        }
+        for(const auto& section : result.sections) {
+            result.size = (std::max)(result.size, to<std::size_t>(section.offset + section.size));
+        }
+        return result;
+    }
+
     Result<optional<std::vector<elf::symbol_entry>>, internal_error> elf::resolve_symtab_entries(
         const Result<const optional<elf::symtab_info> &, internal_error>& symtab
     ) {
@@ -295,6 +364,8 @@ namespace detail {
             info.sh_size = byteswap_if_needed(section_header.sh_size);
             info.sh_entsize = byteswap_if_needed(section_header.sh_entsize);
             info.sh_link = byteswap_if_needed(section_header.sh_link);
+            info.sh_info = byteswap_if_needed(section_header.sh_info);
+            info.sh_addralign = byteswap_if_needed(section_header.sh_addralign);
             sections.push_back(info);
         }
         did_load_sections = true;

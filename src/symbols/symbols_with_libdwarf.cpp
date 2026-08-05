@@ -89,11 +89,22 @@ namespace libdwarf {
     CPPTRACE_FORCE_NO_INLINE_FOR_PROFILING
     void try_resolve_jit_frame(const cpptrace::object_frame& dlframe, frame_with_inlines& frame) {
         auto object_res = lookup_jit_object(dlframe.raw_address);
-        // TODO: At some point, dwarf resolution
         if(object_res) {
+            auto& result = object_res.unwrap();
+            #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
+            if(result.dwarf_resolver) {
+                frame = result.dwarf_resolver->resolve_frame({
+                    dlframe.raw_address,
+                    dlframe.raw_address,
+                    ""
+                });
+            }
+            #endif
             frame.frame.raw_address = dlframe.raw_address;
-            frame.frame.object_address = dlframe.raw_address - object_res.unwrap().base;
-            frame.frame.symbol = object_res.unwrap().object.lookup_symbol(dlframe.raw_address).value_or("");
+            frame.frame.object_address = dlframe.raw_address - result.base;
+            if(frame.frame.symbol.empty()) {
+                frame.frame.symbol = result.object.lookup_symbol(dlframe.raw_address).value_or("");
+            }
         }
     }
     #endif

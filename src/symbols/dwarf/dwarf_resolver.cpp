@@ -18,8 +18,12 @@
 #if IS_APPLE
 #include "binary/mach-o.hpp"
 #endif
+#if IS_LINUX
+#include <elf.h>
+#endif
 
 #include <algorithm>
+#include <cstring>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
@@ -51,12 +55,333 @@ namespace libdwarf {
         dwarf_resolver& resolver;
     };
 
+    #if IS_LINUX
+    struct in_memory_dwarf_object {
+        elf::object_data object_data;
+        Dwarf_Obj_Access_Interface_a_s interface;
+        std::vector<bool> relocated_sections;
+
+        explicit in_memory_dwarf_object(elf::object_data&& object_data_)
+            : object_data(std::move(object_data_)),
+              relocated_sections(object_data.sections.size(), false),
+              interface{this, &methods} {}
+
+        template<typename T>
+        T byteswap_if_needed(T value) const {
+            if(detail::is_little_endian() == object_data.is_little_endian) {
+                return value;
+            }
+            return byteswap(value);
+        }
+
+        template<typename T>
+        T load_value(const std::vector<char>& data, std::size_t offset) const {
+            T value{};
+            if(offset + sizeof(T) > data.size()) {
+                return value;
+            }
+            std::memcpy(&value, data.data() + offset, sizeof(T));
+            return byteswap_if_needed(value);
+        }
+
+        template<typename T>
+        void store_value(std::vector<char>& data, std::size_t offset, T value) const {
+            value = byteswap_if_needed(value);
+            std::memcpy(data.data() + offset, &value, sizeof(T));
+        }
+
+        template<typename Sym>
+        Dwarf_Addr normalized_symbol_value(const Sym& sym) const {
+            auto value = byteswap_if_needed(sym.st_value);
+            auto shndx = byteswap_if_needed(sym.st_shndx);
+            if(
+                object_data.type == ET_REL
+                && shndx != SHN_UNDEF
+                && shndx < object_data.sections.size()
+            ) {
+                value += object_data.sections[shndx].addr;
+            }
+            return value;
+        }
+
+        template<typename Sym>
+        Dwarf_Addr symbol_value(std::size_t symtab_index, std::size_t symbol_index) const {
+            const auto& symtab = object_data.sections[symtab_index];
+            if(symtab.entsize == 0 || symbol_index * symtab.entsize + sizeof(Sym) > symtab.data.size()) {
+                return 0;
+            }
+            const auto& sym = *reinterpret_cast<const Sym*>(symtab.data.data() + symbol_index * symtab.entsize);
+            return normalized_symbol_value(sym);
+        }
+
+        template<typename T>
+        int apply_relocation_value(
+            std::vector<char>& target,
+            std::size_t offset,
+            Dwarf_Unsigned value,
+            int* error
+        ) {
+            if(offset + sizeof(T) > target.size()) {
+                *error = 0;
+                return DW_DLV_ERROR;
+            }
+            store_value(target, offset, static_cast<T>(value));
+            return DW_DLV_OK;
+        }
+
+        int apply_x86_64_relocation(
+            std::vector<char>& target,
+            std::size_t offset,
+            unsigned type,
+            Dwarf_Addr symbol,
+            Dwarf_Signed addend,
+            Dwarf_Addr place,
+            int* error
+        ) {
+            switch(type) {
+                case R_X86_64_NONE:
+                    return DW_DLV_OK;
+                case R_X86_64_64:
+                    return apply_relocation_value<std::uint64_t>(target, offset, symbol + addend, error);
+                case R_X86_64_32:
+                case R_X86_64_32S:
+                    return apply_relocation_value<std::uint32_t>(target, offset, symbol + addend, error);
+                case R_X86_64_PC32:
+                    return apply_relocation_value<std::uint32_t>(target, offset, symbol + addend - place, error);
+                default:
+                    *error = 0;
+                    return DW_DLV_ERROR;
+            }
+        }
+
+        template<typename Rela, typename Sym>
+        int relocate_rela_section_entries(
+            std::size_t reloc_section_index,
+            std::size_t target_section_index,
+            int* error
+        ) {
+            const auto& reloc_section = object_data.sections[reloc_section_index];
+            auto& target = object_data.sections[target_section_index].data;
+            if(reloc_section.entsize == 0) {
+                *error = 0;
+                return DW_DLV_ERROR;
+            }
+            auto symtab_index = reloc_section.link;
+            if(symtab_index >= object_data.sections.size()) {
+                *error = 0;
+                return DW_DLV_ERROR;
+            }
+            for(std::size_t offset = 0; offset + sizeof(Rela) <= reloc_section.data.size(); offset += reloc_section.entsize) {
+                const auto& rel = *reinterpret_cast<const Rela*>(reloc_section.data.data() + offset);
+                const auto reloc_offset = byteswap_if_needed(rel.r_offset);
+                const auto reloc_info = byteswap_if_needed(rel.r_info);
+                const auto symbol_index = object_data.is_64_bit ? ELF64_R_SYM(reloc_info) : ELF32_R_SYM(reloc_info);
+                const auto type = object_data.is_64_bit ? ELF64_R_TYPE(reloc_info) : ELF32_R_TYPE(reloc_info);
+                const auto symbol = symbol_value<Sym>(symtab_index, symbol_index);
+                const auto addend = static_cast<Dwarf_Signed>(byteswap_if_needed(rel.r_addend));
+                const auto place = object_data.sections[target_section_index].addr + reloc_offset;
+                if(object_data.machine == EM_X86_64) {
+                    auto ret = apply_x86_64_relocation(
+                        target,
+                        reloc_offset,
+                        type,
+                        symbol,
+                        addend,
+                        place,
+                        error
+                    );
+                    if(ret != DW_DLV_OK) {
+                        return ret;
+                    }
+                } else {
+                    *error = 0;
+                    return DW_DLV_ERROR;
+                }
+            }
+            return DW_DLV_OK;
+        }
+
+        template<typename Rel, typename Sym>
+        int relocate_rel_section_entries(
+            std::size_t reloc_section_index,
+            std::size_t target_section_index,
+            int* error
+        ) {
+            const auto& reloc_section = object_data.sections[reloc_section_index];
+            auto& target = object_data.sections[target_section_index].data;
+            if(reloc_section.entsize == 0) {
+                *error = 0;
+                return DW_DLV_ERROR;
+            }
+            auto symtab_index = reloc_section.link;
+            if(symtab_index >= object_data.sections.size()) {
+                *error = 0;
+                return DW_DLV_ERROR;
+            }
+            for(std::size_t offset = 0; offset + sizeof(Rel) <= reloc_section.data.size(); offset += reloc_section.entsize) {
+                const auto& rel = *reinterpret_cast<const Rel*>(reloc_section.data.data() + offset);
+                const auto reloc_offset = byteswap_if_needed(rel.r_offset);
+                const auto reloc_info = byteswap_if_needed(rel.r_info);
+                const auto symbol_index = object_data.is_64_bit ? ELF64_R_SYM(reloc_info) : ELF32_R_SYM(reloc_info);
+                const auto type = object_data.is_64_bit ? ELF64_R_TYPE(reloc_info) : ELF32_R_TYPE(reloc_info);
+                const auto symbol = symbol_value<Sym>(symtab_index, symbol_index);
+                const auto addend = type == R_X86_64_64
+                    ? static_cast<Dwarf_Signed>(load_value<std::uint64_t>(target, reloc_offset))
+                    : static_cast<Dwarf_Signed>(load_value<std::uint32_t>(target, reloc_offset));
+                const auto place = object_data.sections[target_section_index].addr + reloc_offset;
+                if(object_data.machine == EM_X86_64) {
+                    auto ret = apply_x86_64_relocation(
+                        target,
+                        reloc_offset,
+                        type,
+                        symbol,
+                        addend,
+                        place,
+                        error
+                    );
+                    if(ret != DW_DLV_OK) {
+                        return ret;
+                    }
+                } else {
+                    *error = 0;
+                    return DW_DLV_ERROR;
+                }
+            }
+            return DW_DLV_OK;
+        }
+
+        int relocate_section(Dwarf_Unsigned section_index, int* error) {
+            if(section_index >= object_data.sections.size()) {
+                *error = 0;
+                return DW_DLV_ERROR;
+            }
+            if(relocated_sections[section_index]) {
+                *error = 0;
+                return DW_DLV_OK;
+            }
+            for(std::size_t i = 0; i < object_data.sections.size(); ++i) {
+                const auto& section = object_data.sections[i];
+                if(section.info != section_index) {
+                    continue;
+                }
+                int ret = DW_DLV_OK;
+                if(section.type == SHT_RELA) {
+                    ret = object_data.is_64_bit
+                        ? relocate_rela_section_entries<Elf64_Rela, Elf64_Sym>(i, section_index, error)
+                        : relocate_rela_section_entries<Elf32_Rela, Elf32_Sym>(i, section_index, error);
+                } else if(section.type == SHT_REL) {
+                    ret = object_data.is_64_bit
+                        ? relocate_rel_section_entries<Elf64_Rel, Elf64_Sym>(i, section_index, error)
+                        : relocate_rel_section_entries<Elf32_Rel, Elf32_Sym>(i, section_index, error);
+                }
+                if(ret != DW_DLV_OK) {
+                    return ret;
+                }
+            }
+            relocated_sections[section_index] = true;
+            *error = 0;
+            return DW_DLV_OK;
+        }
+
+        static int get_section_info(
+            void* obj,
+            Dwarf_Unsigned section_index,
+            Dwarf_Obj_Access_Section_a* return_section,
+            int* error
+        ) {
+            auto* memory_object = static_cast<in_memory_dwarf_object*>(obj);
+            *error = 0;
+            if(section_index >= memory_object->object_data.sections.size()) {
+                return DW_DLV_NO_ENTRY;
+            }
+            const auto& section = memory_object->object_data.sections[section_index];
+            return_section->as_name = section.name.c_str();
+            return_section->as_type = section.type;
+            return_section->as_flags = section.flags;
+            return_section->as_addr = section.addr;
+            return_section->as_offset = section.offset;
+            return_section->as_size = section.size;
+            return_section->as_link = section.link;
+            return_section->as_info = section.info;
+            return_section->as_addralign = section.addralign;
+            return_section->as_entrysize = section.entsize;
+            return DW_DLV_OK;
+        }
+
+        static Dwarf_Small get_byte_order(void* obj) {
+            auto* memory_object = static_cast<in_memory_dwarf_object*>(obj);
+            return memory_object->object_data.is_little_endian ? DW_END_little : DW_END_big;
+        }
+
+        static Dwarf_Small get_length_size(void* obj) {
+            auto* memory_object = static_cast<in_memory_dwarf_object*>(obj);
+            return memory_object->object_data.is_64_bit ? 8 : 4;
+        }
+
+        static Dwarf_Small get_pointer_size(void* obj) {
+            auto* memory_object = static_cast<in_memory_dwarf_object*>(obj);
+            return memory_object->object_data.is_64_bit ? 8 : 4;
+        }
+
+        static Dwarf_Unsigned get_file_size(void* obj) {
+            auto* memory_object = static_cast<in_memory_dwarf_object*>(obj);
+            return memory_object->object_data.size;
+        }
+
+        static Dwarf_Unsigned get_section_count(void* obj) {
+            auto* memory_object = static_cast<in_memory_dwarf_object*>(obj);
+            return memory_object->object_data.sections.size();
+        }
+
+        static int load_section(
+            void* obj,
+            Dwarf_Unsigned secindex,
+            Dwarf_Small** return_data,
+            int* error
+        ) {
+            auto* memory_object = static_cast<in_memory_dwarf_object*>(obj);
+            *error = 0;
+            if(secindex >= memory_object->object_data.sections.size()) {
+                return DW_DLV_NO_ENTRY;
+            }
+            auto& section = memory_object->object_data.sections[secindex];
+            *return_data = section.data.empty()
+                ? nullptr
+                : reinterpret_cast<Dwarf_Small*>(section.data.data());
+            return DW_DLV_OK;
+        }
+
+        static int relocate_a_section(
+            void* obj,
+            Dwarf_Unsigned section_index,
+            Dwarf_Debug,
+            int* error
+        ) {
+            auto* memory_object = static_cast<in_memory_dwarf_object*>(obj);
+            return memory_object->relocate_section(section_index, error);
+        }
+
+        static const Dwarf_Obj_Access_Methods_a methods;
+    };
+
+    const Dwarf_Obj_Access_Methods_a in_memory_dwarf_object::methods = {
+        &in_memory_dwarf_object::get_section_info,
+        &in_memory_dwarf_object::get_byte_order,
+        &in_memory_dwarf_object::get_length_size,
+        &in_memory_dwarf_object::get_pointer_size,
+        &in_memory_dwarf_object::get_file_size,
+        &in_memory_dwarf_object::get_section_count,
+        &in_memory_dwarf_object::load_section,
+        &in_memory_dwarf_object::relocate_a_section,
+        nullptr,
+        nullptr
+    };
+    #endif
+
     class dwarf_resolver : public symbol_resolver {
         std::string object_path;
-        // dwarf_finish needs to be called after all other dwarf stuff is cleaned up, e.g. `srcfiles` and aranges etc
-        // raii_wrapping ensures this is the last thing done after the destructor logic and all other data members are
-        // cleaned up
-        raii_wrapper<Dwarf_Debug, void(*)(Dwarf_Debug)> dbg{nullptr, [](Dwarf_Debug dbg) { dwarf_finish(dbg); }};
+        raii_wrapper<Dwarf_Debug, void(*)(Dwarf_Debug)> dbg{nullptr, [](Dwarf_Debug) {}};
+        bool use_object_finish = false;
         bool ok = false;
         // .debug_aranges cache
         Dwarf_Arange* aranges = nullptr;
@@ -79,6 +404,9 @@ namespace libdwarf {
         std::unordered_map<Dwarf_Off, std::unique_ptr<dwarf_resolver>> split_full_cu_resolvers;
         // info for resolving a dwo object
         optional<skeleton_info> skeleton;
+        #if IS_LINUX
+        std::unique_ptr<in_memory_dwarf_object> memory_object;
+        #endif
 
     private:
         // Error handling helper
@@ -107,6 +435,28 @@ namespace libdwarf {
         }
 
     public:
+        void finish_debug() {
+            if(dbg.get()) {
+                if(use_object_finish) {
+                    dwarf_object_finish(dbg.get());
+                } else {
+                    dwarf_finish(dbg.get());
+                }
+                dbg.get() = nullptr;
+            }
+        }
+
+        void initialize_post_open() {
+            if(skeleton) {
+                VERIFY(wrap(dwarf_set_tied_dbg, dbg, skeleton.unwrap().resolver.dbg) == DW_DLV_OK);
+            }
+
+            if(ok && !get_dwarf_resolver_disable_aranges()) {
+                // Check for .debug_aranges for fast lookup
+                wrap(dwarf_get_aranges, dbg, &aranges, &arange_count);
+            }
+        }
+
         CPPTRACE_FORCE_NO_INLINE_FOR_PROFILING
         explicit dwarf_resolver(cstring_view object_path_, optional<skeleton_info> split_ = nullopt)
             : object_path(object_path_),
@@ -178,16 +528,46 @@ namespace libdwarf {
                 ok = false;
                 PANIC("Unknown return code from dwarf_init_path");
             }
-
-            if(skeleton) {
-                VERIFY(wrap(dwarf_set_tied_dbg, dbg, skeleton.unwrap().resolver.dbg) == DW_DLV_OK);
-            }
-
-            if(ok && !get_dwarf_resolver_disable_aranges()) {
-                // Check for .debug_aranges for fast lookup
-                wrap(dwarf_get_aranges, dbg, &aranges, &arange_count);
-            }
+            initialize_post_open();
         }
+
+        #if IS_LINUX
+        CPPTRACE_FORCE_NO_INLINE_FOR_PROFILING
+        explicit dwarf_resolver(elf::object_data object_data_, optional<skeleton_info> split_ = nullopt)
+            : object_path("<jit>"),
+              skeleton(std::move(split_)),
+              memory_object(detail::make_unique<in_memory_dwarf_object>(std::move(object_data_)))
+        {
+            dwarf_set_de_alloc_flag(0);
+            Dwarf_Error error = nullptr;
+            auto ret = dwarf_object_init_b(
+                &memory_object->interface,
+                nullptr,
+                nullptr,
+                DW_GROUPNUMBER_ANY,
+                &dbg.get(),
+                &error
+            );
+            use_object_finish = true;
+            if(ret == DW_DLV_OK) {
+                ok = true;
+            } else if(ret == DW_DLV_NO_ENTRY) {
+                ok = false;
+            } else if(ret == DW_DLV_ERROR) {
+                ok = false;
+                Dwarf_Unsigned ev = dwarf_errno(error);
+                auto msg = raii_wrap(
+                    dwarf_errmsg(error),
+                    [this, error] (char*) { dwarf_dealloc_error(dbg.get(), error); }
+                );
+                log::error("dwarf error: dwarf_object_init_b failed with error {} {}", ev, msg.get());
+            } else {
+                ok = false;
+                PANIC("Unknown return code from dwarf_object_init_b");
+            }
+            initialize_post_open();
+        }
+        #endif
 
         CPPTRACE_FORCE_NO_INLINE_FOR_PROFILING
         ~dwarf_resolver() override {
@@ -198,6 +578,7 @@ namespace libdwarf {
                 }
                 dwarf_dealloc(dbg, aranges, DW_DLA_LIST);
             }
+            finish_debug();
         }
 
         dwarf_resolver(const dwarf_resolver&) = delete;
@@ -1023,6 +1404,11 @@ namespace libdwarf {
     std::unique_ptr<symbol_resolver> make_dwarf_resolver(cstring_view object_path) {
         return detail::make_unique<dwarf_resolver>(object_path);
     }
+    #if IS_LINUX
+    std::unique_ptr<symbol_resolver> make_dwarf_resolver(elf::object_data object_data) {
+        return detail::make_unique<dwarf_resolver>(std::move(object_data));
+    }
+    #endif
 }
 }
 CPPTRACE_END_NAMESPACE
