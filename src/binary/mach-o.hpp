@@ -42,6 +42,48 @@ namespace detail {
             std::string name;
         };
 
+        struct object_relocation {
+            std::uint32_t address;
+            std::uint32_t symbolnum;
+            std::uint8_t pcrel;
+            std::uint8_t length;
+            std::uint8_t external;
+            std::uint8_t type;
+        };
+
+        struct object_symbol {
+            std::uint8_t type;
+            std::uint8_t sect;
+            std::uint16_t desc;
+            uint64_t value;
+            std::string name;
+        };
+
+        struct object_section {
+            std::string name;
+            std::string segment_name;
+            std::uint32_t flags;
+            uint64_t addr;
+            std::uint32_t offset;
+            uint64_t size;
+            std::uint32_t align;
+            std::uint32_t reloff;
+            std::uint32_t nreloc;
+            std::vector<char> data;
+            std::vector<object_relocation> relocations;
+        };
+
+        struct object_data {
+            bool is_little_endian;
+            bool is_64_bit;
+            std::uint32_t filetype;
+            cpu_type_t cpu_type;
+            cpu_subtype_t cpu_subtype;
+            std::size_t size;
+            std::vector<object_section> sections;
+            std::vector<object_symbol> symbols;
+        };
+
         // map from object file to a vector of symbols to resolve
         using debug_map = std::unordered_map<std::string, std::vector<debug_map_entry>>;
 
@@ -114,6 +156,7 @@ namespace detail {
         Result<debug_map, internal_error> get_debug_map();
 
         Result<const std::vector<symbol_entry>&, internal_error> symbol_table();
+        Result<object_data, internal_error> get_object_data();
 
         optional<std::string> lookup_symbol(frame_ptr pc);
 
@@ -128,6 +171,8 @@ namespace detail {
 
         template<std::size_t Bits>
         Result<segment_command_64, internal_error> load_segment_command(std::uint32_t offset) const;
+        template<std::size_t Bits>
+        Result<section_64, internal_error> load_section(std::uint32_t offset) const;
 
         Result<symtab_command, internal_error> load_symbol_table_command(std::uint32_t offset) const;
 

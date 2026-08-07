@@ -17,6 +17,7 @@ namespace detail {
         ~memory_file_view() override = default;
 
         string_view path() const override;
+        std::size_t size() const override;
 
         virtual Result<monostate, internal_error> read_bytes(bspan buffer, off_t offset) const override;
     };

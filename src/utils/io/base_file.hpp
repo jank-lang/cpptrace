@@ -12,6 +12,7 @@ namespace detail {
     public:
         virtual ~base_file() = default;
         virtual string_view path() const = 0;
+        virtual std::size_t size() const = 0;
         virtual Result<monostate, internal_error> read_bytes(bspan buffer, off_t offset) const = 0;
 
         template<

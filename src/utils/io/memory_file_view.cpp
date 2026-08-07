@@ -6,6 +6,10 @@ namespace detail {
         return object_path;
     }
 
+    std::size_t memory_file_view::size() const {
+        return data.size();
+    }
+
     Result<monostate, internal_error> memory_file_view::read_bytes(bspan buffer, off_t offset) const {
         if(offset < 0) {
             return internal_error("Illegal read in memory file {}: offset {}", path(), offset);

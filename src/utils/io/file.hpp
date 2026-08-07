@@ -11,14 +11,19 @@ namespace detail {
     class file : public base_file {
         file_wrapper file_obj;
         std::string object_path;
+        std::size_t file_size = 0;
 
-        file(file_wrapper file_obj, string_view path) : file_obj(std::move(file_obj)), object_path(path) {}
+        file(file_wrapper file_obj, string_view path, std::size_t file_size)
+            : file_obj(std::move(file_obj)),
+              object_path(path),
+              file_size(file_size) {}
 
     public:
         file(file&&) = default;
         ~file() override = default;
 
         string_view path() const override;
+        std::size_t size() const override;
 
         static Result<file, internal_error> open(cstring_view object_path);
 
