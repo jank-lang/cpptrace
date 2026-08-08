@@ -4,8 +4,6 @@
 #include "utils/utils.hpp"
 #include "utils/io/file.hpp"
 #include "utils/io/memory_file_view.hpp"
-#include "logging.hpp"
-
 #if IS_APPLE
 
 // A number of mach-o functions are deprecated as of macos 13
@@ -182,6 +180,10 @@ namespace detail {
         return internal_error("Couldn't find __TEXT section while parsing Mach-O object");
     }
 
+    std::uint32_t mach_o::get_filetype() const {
+        return filetype;
+    }
+
     std::size_t mach_o::get_fat_index() const {
         VERIFY(fat_index != std::numeric_limits<std::size_t>::max());
         return fat_index;
@@ -218,7 +220,6 @@ namespace detail {
         std::vector<pc_range> ranges;
         auto object_data_res = get_object_data();
         if(object_data_res.is_error()) {
-            log::warn("mach-o get_pc_ranges: get_object_data failed");
             return std::move(object_data_res).unwrap_error();
         }
 
@@ -230,20 +231,10 @@ namespace detail {
                 && (section.name == "__text" || section.name == "__ltext");
             if(section.size != 0 && section.addr != 0 && (has_instruction_flags || is_text_like_section)) {
                 ranges.push_back({section.addr, section.addr + section.size});
-                log::debug(
-                    "mach-o get_pc_ranges: executable section {}:{} addr={} size={} flags=0x{:x} by={}",
-                    section.segment_name,
-                    section.name,
-                    section.addr,
-                    section.size,
-                    section.flags,
-                    has_instruction_flags ? "flags" : "name"
-                );
             }
         }
 
         if(!ranges.empty()) {
-            log::debug("mach-o get_pc_ranges: returning {} executable-section ranges", ranges.size());
             return ranges;
         }
 
@@ -260,16 +251,10 @@ namespace detail {
                 auto& segment = segment_res.unwrap_value();
                 if(std::strcmp(segment.segname, "__TEXT") == 0) {
                     ranges.push_back({segment.vmaddr, segment.vmaddr + segment.vmsize});
-                    log::debug(
-                        "mach-o get_pc_ranges: fallback __TEXT range addr={} size={}",
-                        segment.vmaddr,
-                        segment.vmsize
-                    );
                 }
             }
         }
 
-        log::debug("mach-o get_pc_ranges: returning {} total ranges", ranges.size());
         return ranges;
     }
 
@@ -525,14 +510,6 @@ namespace detail {
             {},
             {}
         };
-        log::debug(
-            "mach-o get_object_data: filetype=0x{:x} cpu_type={} cpu_subtype={} bits={} load_commands={}",
-            filetype,
-            static_cast<int>(cputype),
-            static_cast<int>(cpusubtype),
-            bits,
-            load_commands.size()
-        );
 
         for(const auto& command : load_commands) {
             if(command.cmd != LC_SEGMENT_64 && command.cmd != LC_SEGMENT) {
@@ -571,17 +548,6 @@ namespace detail {
                     {},
                     {}
                 };
-                log::debug(
-                    "mach-o get_object_data: section {}:{} addr={} size={} flags=0x{:x} align={} reloff={} nreloc={}",
-                    object_section.segment_name,
-                    object_section.name,
-                    object_section.addr,
-                    object_section.size,
-                    object_section.flags,
-                    object_section.align,
-                    object_section.reloff,
-                    object_section.nreloc
-                );
 
                 auto const section_type = loaded_section.flags & SECTION_TYPE;
                 auto const section_in_file =
@@ -600,50 +566,13 @@ namespace detail {
                     if(!read_res) {
                         return read_res.unwrap_error();
                     }
-                } else if(
-                    loaded_section.size != 0
-                    && section_type != S_ZEROFILL
-                    && section_type != S_GB_ZEROFILL
-                    && section_type != S_THREAD_LOCAL_ZEROFILL
-                ) {
-                    log::debug(
-                        "mach-o get_object_data: skipping non-file-backed section {}:{} offset={} size={} file_size={}",
-                        object_section.segment_name,
-                        object_section.name,
-                        object_section.offset,
-                        object_section.size,
-                        file_size
-                    );
-                }
-                if(
-                    object_section.name.rfind("__debug", 0) == 0
-                    || object_section.name == "__eh_frame"
-                    || object_section.name == "__text"
-                    || object_section.name == "__ltext"
-                ) {
-                    log::debug(
-                        "mach-o get_object_data: interesting section {}:{} bytes={} relocations={}",
-                        object_section.segment_name,
-                        object_section.name,
-                        object_section.data.size(),
-                        object_section.relocations.size()
-                    );
                 }
 
                 auto const reloc_table_size = static_cast<std::size_t>(loaded_section.nreloc) * sizeof(relocation_info);
                 auto const relocs_in_file =
                     loaded_section.reloff <= file_size
                     && reloc_table_size <= file_size - loaded_section.reloff;
-                if(loaded_section.nreloc != 0 && !relocs_in_file) {
-                    log::debug(
-                        "mach-o get_object_data: skipping out-of-range relocations for {}:{} reloff={} nreloc={} file_size={}",
-                        object_section.segment_name,
-                        object_section.name,
-                        object_section.reloff,
-                        object_section.nreloc,
-                        file_size
-                    );
-                } else {
+                if(loaded_section.nreloc != 0 && relocs_in_file) {
                     object_section.relocations.reserve(loaded_section.nreloc);
                     for(std::uint32_t reloc_index = 0; reloc_index < loaded_section.nreloc; ++reloc_index) {
                         auto load_reloc = file->read<relocation_info>(
@@ -661,18 +590,6 @@ namespace detail {
                             static_cast<std::uint8_t>(reloc.r_extern),
                             static_cast<std::uint8_t>(reloc.r_type)
                         });
-                        log::debug(
-                            "mach-o get_object_data: relocation {}:{} index={} addr={} symbolnum={} pcrel={} length={} external={} type={}",
-                            object_section.segment_name,
-                            object_section.name,
-                            reloc_index,
-                            static_cast<std::uint32_t>(reloc.r_address),
-                            static_cast<std::uint32_t>(reloc.r_symbolnum),
-                            static_cast<int>(reloc.r_pcrel),
-                            static_cast<int>(reloc.r_length),
-                            static_cast<int>(reloc.r_extern),
-                            static_cast<int>(reloc.r_type)
-                        );
                     }
                 }
 
@@ -688,7 +605,6 @@ namespace detail {
             const auto& symtab_info = symtab_info_res.unwrap_value().get().unwrap();
             const auto& symtab = symtab_info.symtab;
             result.symbols.reserve(symtab.nsyms);
-            constexpr std::size_t max_logged_symbols = 64;
             for(std::size_t i = 0; i < symtab.nsyms; ++i) {
                 auto entry_res = bits == 32
                     ? load_symtab_entry<32>(symtab.symoff, i)
@@ -708,51 +624,7 @@ namespace detail {
                     entry.n_value,
                     str_res.unwrap_value()
                 });
-                if(i < max_logged_symbols) {
-                    log::debug(
-                        "mach-o get_object_data: symbol index={} type=0x{:x} sect={} desc=0x{:x} value={} name='{}'",
-                        i,
-                        static_cast<unsigned>(entry.n_type),
-                        static_cast<unsigned>(entry.n_sect),
-                        static_cast<unsigned>(entry.n_desc),
-                        entry.n_value,
-                        str_res.unwrap_value()
-                    );
-                } else if(i == max_logged_symbols) {
-                    log::debug(
-                        "mach-o get_object_data: suppressing detailed symbol logs after {} entries ({} total)",
-                        max_logged_symbols,
-                        symtab.nsyms
-                    );
-                }
             }
-        }
-
-        std::size_t debug_section_count = 0;
-        std::size_t debug_section_bytes = 0;
-        bool has_eh_frame = false;
-        for(const auto& section : result.sections) {
-            if(section.name.rfind("__debug", 0) == 0) {
-                debug_section_count++;
-                debug_section_bytes += section.data.size();
-            }
-            if(section.name == "__eh_frame") {
-                has_eh_frame = true;
-            }
-        }
-        log::debug(
-            "mach-o get_object_data: extracted {} sections, {} symbols, {} debug sections ({} bytes), has_eh_frame={}",
-            result.sections.size(),
-            result.symbols.size(),
-            debug_section_count,
-            debug_section_bytes,
-            has_eh_frame
-        );
-        if(debug_section_count == 0) {
-            log::warn("mach-o get_object_data: no __debug* sections found in in-memory object");
-        }
-        if(!has_eh_frame) {
-            log::warn("mach-o get_object_data: no __eh_frame section found in in-memory object");
         }
 
         return result;

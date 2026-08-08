@@ -128,6 +128,8 @@ namespace detail {
         mach_o(mach_o&&) = default;
         ~mach_o() = default;
 
+        std::uint32_t get_filetype() const;
+
         Result<std::uintptr_t, internal_error> get_text_vmaddr();
 
         std::size_t get_fat_index() const;

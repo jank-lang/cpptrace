@@ -2,7 +2,6 @@
 
 #include "cpptrace/forward.hpp"
 #include "utils/error.hpp"
-#include "logging.hpp"
 #include "utils/optional.hpp"
 #include "utils/span.hpp"
 #include "binary/elf.hpp"
@@ -48,10 +47,8 @@ namespace detail {
 
     public:
         void add_jit_object(cbspan object) {
-            log::debug("jit add_jit_object start: ptr={} size={}", reinterpret_cast<std::uintptr_t>(object.data()), object.size());
             auto object_res = jit_object_type::open(object);
             if(object_res.is_error()) {
-                log::warn("jit add_jit_object: failed to parse object ptr={} size={}", reinterpret_cast<std::uintptr_t>(object.data()), object.size());
                 if(!should_absorb_trace_exceptions()) {
                     object_res.drop_error();
                 }
@@ -69,13 +66,7 @@ namespace detail {
             auto dwarf_object_res = entry.object->get_object_data();
             if(dwarf_object_res) {
                 entry.dwarf_resolver = libdwarf::make_dwarf_resolver(std::move(dwarf_object_res).unwrap_value());
-                log::debug(
-                    "jit add_jit_object: created in-memory dwarf resolver ptr={} resolver={}",
-                    reinterpret_cast<std::uintptr_t>(object.data()),
-                    reinterpret_cast<std::uintptr_t>(entry.dwarf_resolver.get())
-                );
             } else if(!should_absorb_trace_exceptions()) {
-                log::warn("jit add_jit_object: failed to build in-memory dwarf object ptr={}", reinterpret_cast<std::uintptr_t>(object.data()));
                 dwarf_object_res.drop_error();
             }
             #endif
@@ -84,16 +75,13 @@ namespace detail {
             auto* object_file = objects.back().object.get();
             auto ranges_res = object_file->get_pc_ranges();
             if(ranges_res.is_error()) {
-                log::warn("jit add_jit_object: failed to extract pc ranges ptr={}", reinterpret_cast<std::uintptr_t>(object.data()));
                 if(!should_absorb_trace_exceptions()) {
                     ranges_res.drop_error();
                 }
                 return;
             }
             auto& ranges = ranges_res.unwrap_value();
-            log::debug("jit add_jit_object: ptr={} extracted {} pc ranges", reinterpret_cast<std::uintptr_t>(object.data()), ranges.size());
             for(auto range : ranges) {
-                log::debug("jit add_jit_object: range [{}, {})", range.low, range.high);
                 range_entry entry{
                     range.low,
                     range.high,
@@ -127,9 +115,7 @@ namespace detail {
                 range_list.end()
             );
         }
-
         optional<jit_object_lookup_result> lookup(frame_ptr pc) const {
-            log::debug("jit lookup: pc={} range_count={}", pc, range_list.size());
             auto it = first_less_than_or_equal(
                 range_list.begin(),
                 range_list.end(),
@@ -139,23 +125,10 @@ namespace detail {
                 }
             );
             if(it == range_list.end()) {
-                log::debug("jit lookup: miss, no candidate range for pc={}", pc);
                 return nullopt;
             }
             ASSERT(pc >= it->low);
             if(pc < it->high) {
-                log::debug(
-                    "jit lookup: hit pc={} in [{}, {}) object_ptr={} dwarf_resolver={}",
-                    pc,
-                    it->low,
-                    it->high,
-                    reinterpret_cast<std::uintptr_t>(it->object_start),
-                    #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
-                    reinterpret_cast<std::uintptr_t>(it->dwarf_resolver)
-                    #else
-                    0
-                    #endif
-                );
                 return jit_object_lookup_result{
                     *it->object,
                     it->low
@@ -163,10 +136,8 @@ namespace detail {
                     , it->dwarf_resolver
                     #endif
                 };
-            } else {
-                log::debug("jit lookup: miss, candidate range [{}, {}) does not contain pc={}", it->low, it->high, pc);
-                return nullopt;
             }
+            return nullopt;
         }
 
         void clear_all_jit_objects() {

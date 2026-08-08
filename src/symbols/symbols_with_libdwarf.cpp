@@ -24,6 +24,10 @@ namespace detail {
 namespace libdwarf {
     std::unique_ptr<symbol_resolver> get_resolver_for_object(const std::string& object_path) {
         #if IS_APPLE
+        auto mach_o_object = open_mach_o_cached(object_path);
+        if(mach_o_object.has_value() && mach_o_object.unwrap_value()->get_filetype() == MH_OBJECT) {
+            return make_dwarf_resolver(object_path);
+        }
         // Check if dSYM exist, if not fallback to debug map
         if(!directory_exists(object_path + ".dSYM")) {
             return make_debug_map_resolver(object_path);
@@ -89,20 +93,9 @@ namespace libdwarf {
     #if IS_LINUX || IS_APPLE
     CPPTRACE_FORCE_NO_INLINE_FOR_PROFILING
     void try_resolve_jit_frame(const cpptrace::object_frame& dlframe, frame_with_inlines& frame) {
-        log::debug("jit try_resolve_jit_frame: raw_address={} object_path='{}'", dlframe.raw_address, dlframe.object_path);
         auto object_res = lookup_jit_object(dlframe.raw_address);
         if(object_res) {
             auto& result = object_res.unwrap();
-            log::debug(
-                "jit try_resolve_jit_frame: lookup hit raw_address={} base={} dwarf_resolver={}",
-                dlframe.raw_address,
-                result.base,
-                #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
-                reinterpret_cast<std::uintptr_t>(result.dwarf_resolver)
-                #else
-                0
-                #endif
-            );
             #ifdef CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF
             if(result.dwarf_resolver) {
                 frame = result.dwarf_resolver->resolve_frame({
@@ -110,22 +103,13 @@ namespace libdwarf {
                     dlframe.raw_address,
                     ""
                 });
-                log::debug(
-                    "jit try_resolve_jit_frame: dwarf resolution result symbol='{}' file='{}' line_present={}",
-                    frame.frame.symbol,
-                    frame.frame.filename,
-                    frame.frame.line.has_value()
-                );
             }
             #endif
             frame.frame.raw_address = dlframe.raw_address;
             frame.frame.object_address = dlframe.raw_address - result.base;
             if(frame.frame.symbol.empty()) {
                 frame.frame.symbol = result.object.lookup_symbol(dlframe.raw_address).value_or("");
-                log::debug("jit try_resolve_jit_frame: fallback lookup_symbol -> '{}'", frame.frame.symbol);
             }
-        } else {
-            log::debug("jit try_resolve_jit_frame: lookup miss raw_address={}", dlframe.raw_address);
         }
     }
     #endif

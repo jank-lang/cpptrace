@@ -520,85 +520,37 @@ namespace libdwarf {
                 return DW_DLV_ERROR;
             }
             if(relocated_sections[section_index]) {
-                log::debug("mach-o dwarf relocate_section: section {} already relocated", section_index);
                 *error = 0;
                 return DW_DLV_OK;
             }
 
             auto& target_section = object_data.sections[real_section_index];
             auto& target = target_section.data;
-            log::debug(
-                "mach-o dwarf relocate_section: section {} {}:{} relocations={} bytes={}",
-                section_index,
-                target_section.segment_name,
-                target_section.name,
-                target_section.relocations.size(),
-                target.size()
-            );
             for(const auto& reloc : target_section.relocations) {
                 if(object_data.cpu_type == CPU_TYPE_ARM64) {
                     if(reloc.type != ARM64_RELOC_UNSIGNED || reloc.pcrel) {
-                        log::warn(
-                            "mach-o dwarf relocate_section: unsupported arm64 relocation section={} type={} pcrel={} external={} symbolnum={} length={} address={}",
-                            section_index,
-                            static_cast<int>(reloc.type),
-                            static_cast<int>(reloc.pcrel),
-                            static_cast<int>(reloc.external),
-                            reloc.symbolnum,
-                            static_cast<int>(reloc.length),
-                            reloc.address
-                        );
                         *error = 0;
                         return DW_DLV_ERROR;
                     }
                 } else if(object_data.cpu_type == CPU_TYPE_X86_64) {
                     if(reloc.type != X86_64_RELOC_UNSIGNED || reloc.pcrel) {
-                        log::warn(
-                            "mach-o dwarf relocate_section: unsupported x86_64 relocation section={} type={} pcrel={} external={} symbolnum={} length={} address={}",
-                            section_index,
-                            static_cast<int>(reloc.type),
-                            static_cast<int>(reloc.pcrel),
-                            static_cast<int>(reloc.external),
-                            reloc.symbolnum,
-                            static_cast<int>(reloc.length),
-                            reloc.address
-                        );
                         *error = 0;
                         return DW_DLV_ERROR;
                     }
                 } else {
-                    log::warn("mach-o dwarf relocate_section: unsupported cpu type {}", static_cast<int>(object_data.cpu_type));
                     *error = 0;
                     return DW_DLV_ERROR;
                 }
 
                 auto reloc_offset = static_cast<std::size_t>(reloc.address);
                 auto symbol = relocation_symbol_value(reloc);
-                log::debug(
-                    "mach-o dwarf relocate_section: apply section={} offset={} type={} length={} symbol={} external={} symbolnum={}",
-                    section_index,
-                    reloc_offset,
-                    static_cast<int>(reloc.type),
-                    static_cast<int>(reloc.length),
-                    static_cast<unsigned long long>(symbol),
-                    static_cast<int>(reloc.external),
-                    reloc.symbolnum
-                );
                 auto ret = apply_absolute_relocation(target, reloc_offset, reloc.length, symbol, error);
                 if(ret != DW_DLV_OK) {
-                    log::warn(
-                        "mach-o dwarf relocate_section: failed applying relocation section={} offset={} length={} symbol={}",
-                        section_index,
-                        reloc_offset,
-                        static_cast<int>(reloc.length),
-                        static_cast<unsigned long long>(symbol)
-                    );
                     return ret;
                 }
             }
 
             relocated_sections[section_index] = true;
-            log::debug("mach-o dwarf relocate_section: finished section {}", section_index);
             *error = 0;
             return DW_DLV_OK;
         }
@@ -629,15 +581,6 @@ namespace libdwarf {
                 return DW_DLV_NO_ENTRY;
             }
             const auto& section = memory_object->object_data.sections[real_section_index];
-            log::debug(
-                "mach-o dwarf get_section_info: index={} {}:{} addr={} size={} flags=0x{:x}",
-                section_index,
-                section.segment_name,
-                section.name,
-                section.addr,
-                section.size,
-                section.flags
-            );
             return_section->as_name = standardize_mach_o_dwarf_section_name(section);
             return_section->as_type = 0;
             return_section->as_flags = section.flags;
@@ -693,13 +636,6 @@ namespace libdwarf {
                 return DW_DLV_NO_ENTRY;
             }
             auto& section = memory_object->object_data.sections[real_section_index];
-            log::debug(
-                "mach-o dwarf load_section: index={} {}:{} bytes={}",
-                secindex,
-                section.segment_name,
-                section.name,
-                section.data.size()
-            );
             *return_data = section.data.empty()
                 ? nullptr
                 : reinterpret_cast<Dwarf_Small*>(section.data.data());
@@ -931,17 +867,8 @@ namespace libdwarf {
               skeleton(std::move(split_)),
               memory_object(detail::make_unique<in_memory_dwarf_object>(std::move(object_data_)))
         {
-            log::debug(
-                "mach-o dwarf_resolver ctor: sections={} symbols={} filetype=0x{:x} cpu_type={} bits={}",
-                memory_object->object_data.sections.size(),
-                memory_object->object_data.symbols.size(),
-                memory_object->object_data.filetype,
-                static_cast<int>(memory_object->object_data.cpu_type),
-                memory_object->object_data.is_64_bit ? 64 : 32
-            );
             dwarf_set_de_alloc_flag(0);
             Dwarf_Error error = nullptr;
-            log::debug("mach-o dwarf_resolver ctor: calling dwarf_object_init_b");
             auto ret = dwarf_object_init_b(
                 &memory_object->interface,
                 nullptr,
@@ -953,10 +880,8 @@ namespace libdwarf {
             use_object_finish = true;
             if(ret == DW_DLV_OK) {
                 ok = true;
-                log::debug("mach-o dwarf_resolver ctor: dwarf_object_init_b succeeded");
             } else if(ret == DW_DLV_NO_ENTRY) {
                 ok = false;
-                log::warn("mach-o dwarf_resolver ctor: dwarf_object_init_b reported no DWARF");
             } else if(ret == DW_DLV_ERROR) {
                 ok = false;
                 Dwarf_Unsigned ev = dwarf_errno(error);
@@ -964,7 +889,6 @@ namespace libdwarf {
                     dwarf_errmsg(error),
                     [this, error] (char*) { dwarf_dealloc_error(dbg.get(), error); }
                 );
-                log::error("mach-o dwarf_resolver ctor: dwarf_object_init_b failed with error {} {}", ev, msg.get());
                 log::error("dwarf error: dwarf_object_init_b failed with error {} {}", ev, msg.get());
             } else {
                 ok = false;
