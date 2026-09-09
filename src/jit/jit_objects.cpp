@@ -65,7 +65,16 @@ namespace detail {
             #if IS_LINUX || IS_APPLE
             auto dwarf_object_res = entry.object->get_object_data();
             if(dwarf_object_res) {
-                entry.dwarf_resolver = libdwarf::make_dwarf_resolver(std::move(dwarf_object_res).unwrap_value());
+                try {
+                    entry.dwarf_resolver = libdwarf::make_dwarf_resolver(std::move(dwarf_object_res).unwrap_value());
+                } catch(...) {
+                    // Unlike the other resolver construction paths in this file, the dwarf_resolver
+                    // constructor can throw directly (e.g. libdwarf reporting an error while probing
+                    // .debug_aranges on a JIT-emitted object). Route it through the same
+                    // absorb-trace-exceptions handling as everywhere else instead of letting it
+                    // propagate out through JITLink, which doesn't expect exceptions.
+                    log_and_maybe_propagate_exception(std::current_exception());
+                }
             } else if(!should_absorb_trace_exceptions()) {
                 dwarf_object_res.drop_error();
             }
